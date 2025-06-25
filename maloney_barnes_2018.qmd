@@ -1,11 +1,12 @@
 ---
-title: "Maloney and Barnes-Holmes 2016"
+title: "Explorando estatísticas do IRAP"
 author: "Mateus Silvestrin"
 format: 
   html:
      code-fold: true
      toc: true
-     fig-width: 12
+     toc-depth: 2
+     fig-width: 8
      fig-cap-location: top
      fig-format: svg
      embed-resources: true
@@ -15,10 +16,13 @@ editor_options:
 ---
 
 ```{r}
+#| message: false
+#| warning: false
 library(tidyverse)
 #library(ggrain)
 library(colorspace)
 library(here)
+library(huxtable)
 
 library(afex)
 library(emmeans)
@@ -29,6 +33,8 @@ if (Sys.info()[["sysname"]] == "Windows") windowsFonts(Roboto = windowsFont("Rob
 theme_set(theme_bw(16,"Roboto")+
   theme(legend.position = "bottom"))
 ```
+
+# Maloney & Barnes-Holmes (2016)
 
 ## Correção de p-valores interação _response options_ x _response-order_
 
@@ -61,9 +67,9 @@ results_dt <-
 
 results_dt %>% 
   ggplot(aes(Response_Option, d_irap, colour = Block_Order))+
-  geom_errorbar(aes(ymin = d_irap-ci, ymax = d_irap+ci), width = .2,
+  geom_errorbar(aes(ymin = d_irap-ci, ymax = d_irap+ci), width = .15,
                 position = "dodge2", linewidth = 1)+
-  geom_point(size = 3, position = position_dodge2(width = .2))
+  geom_point(size = 3, position = position_dodge2(width = .15))
 ```
 
 ## Testes entre ordem de bloco
@@ -87,13 +93,19 @@ Valores com correção de Holm para múltiplas comparações = `r corrected_resp
 
 # Simulando um I-RAP
 
- The four trial-types for a hypothetical self-esteem IRAP using "Self"/"Others" as labels and "Positive"/"Negative" as targets would be:
-Trial-Type 1: Self-Positive (e.g., Label: "I am," Target: "Loyal")
-Trial-Type 2: Self-Negative (e.g., Label: "I am," Target: "Cruel")
-Trial-Type 3: Others-Positive (e.g., Label: "Others are," Target: "Loyal")
-Trial-Type 4: Others-Negative (e.g., Label: "Others are," Target: "Cruel")
+Uma simulação de tempos de reação (TR) de um IRAP hipotético sobre auto-estima sugerido pelo Gemini:
+
+ > Four trial-types for a hypothetical self-esteem IRAP using "Self"/"Others" as labels and "Positive"/"Negative" as targets would be:  
+Trial-Type 1: Self-Positive (e.g., Label: "I am," Target: "Loyal")  
+Trial-Type 2: Self-Negative (e.g., Label: "I am," Target: "Cruel")  
+Trial-Type 3: Others-Positive (e.g., Label: "Others are," Target: "Loyal")  
+Trial-Type 4: Others-Negative (e.g., Label: "Others are," Target: "Cruel")  
+
 
 ```{r}
+#| message: false
+#| warning: false
+
 set.seed(777)
 
 fixed_effects <- list(self_positive = .5,
@@ -101,7 +113,7 @@ fixed_effects <- list(self_positive = .5,
                       others_positive = .7,
                       others_negative = 1)
 
-n_participants <- 10
+n_participants <- 40
 n_trials_per_condition <- 20
 
 irap_sim <- 
@@ -110,10 +122,10 @@ irap_sim <-
             participant = 1:n_participants,
             type_trial_n = 1:n_trials_per_condition) %>% 
   group_by(participant) %>% 
-  mutate(participant_intercept = rexp(1,3), 
-          participant_var = rexp(1,2)) %>% 
+  mutate(participant_intercept = rexp(1,1),
+         participant_var = rexp(1,2)) %>% 
   group_by(participant, trial_type) %>% 
-  mutate(participant_trial_effect = rexp(1,3)) %>% 
+  mutate(participant_trial_effect = runif(1,.2,1)) %>% 
   ungroup() %>% 
   rowwise() %>% 
   mutate(rt = rnorm(1,
@@ -123,18 +135,91 @@ irap_sim <-
 ```
 
 ```{r}
+#| message: false
+#| warning: false
+
+irap_avgs <- 
+  irap_sim %>% 
+  group_by(trial_type, participant) %>% 
+  summarise(rt = mean(rt))
+
 irap_sim %>% 
-  ggplot(aes("", rt, colour = trial_type))+
-  stat_summary()
+  ggplot(aes(trial_type, rt))+
+  geom_jitter(data = irap_avgs, width = .15, alpha = .3, height = 0)+
+  stat_summary(size = 1, colour = "firebrick")+
+  labs(subtitle = "Self-steem IRAP simulation data", 
+       y = "RT (s)")
 ```
 
-```{r}
+## Modelo linear hierárquico
+
+A melhor forma de obter os efeitos em uma abordagem de modelos hierárquicos é fazer uma comparação de modelos com e sem preditores de interesse. A partir disso é possível calcular os efeitos significativos com uma comparação de modelos no estilo da ANOVA. O pacote de R utilizado aqui (`afex`) faz esse procedimento automaticamente. Neste caso, temos só um preditor, que é o tipo de tentativa: 
+
+```{r anova table}
 lmm <- 
   irap_sim %>% 
-  mixed(rt ~ trial_type + (1+trial_type|participant),method = "S", data = .,
-        type = 2, check_contrasts = F)
+  mixed(rt ~ trial_type + (1+trial_type| participant),method = "S",
+        data = ., type = 2, check_contrasts = F)
 
-lmm
-lmm %>% summary()
+anova_tab <- 
+  lmm %>% 
+  apa_print()
+
+apa_table(anova_tab$table)
+#lmm %>% summary()
 ```
+
+Conforme esperado, o efeito é significativo. Vejamos agora as diferenças entre as condições (_à la_ comparações _post-hoc_).
+
+```{r pairwise comparisons}
+post_hoc <- 
+  lmm %>% 
+  emmeans(~trial_type, pbkrtest.limit = 3200) %>% 
+  contrast("pairwise", adjust = "holm") %>% 
+  apa_print()
+
+apa_table(post_hoc$table)
+```
+
+Aqui temos as comparações par-a-par por condição. Assim como os D-scores, indicam uma diferença que pode ser interperetada como viés. Como mostra a tabela, obtemos média, intervalo de confiança e p-valor para cada comparação. 
+
+Há quase um segundo de diferença entre a resposta positiva e negativa para si-mesmo, com viés para resposta positiva (-0,94s). Para avaliações de terceiros, há uma diferença no mesmo sentido entre respostas positivas e negativas, mas de menor intensidade (-0,31). Há um viés para Outros (0,46s) quando comparamos avaliações negativas.
+
+## Variabilidade individual
+Uma vantagem do modelo hierárquico é que ele estima a variabilidade dos efeitos a partir das variabilidades individuais, conforme abaixo. Esta é uma alternativa à padronização do D-Score, onde a variabilidade individual entra no denominador da fórmula do escore, aqui a estimativa desta variabilidade é utilizada durante o procedimento para separar ela dos efeitos fixos (estimativa dos efeitos populacionais).
+
+```{r}
+
+VarCorr(lmm$full_model) %>% 
+  as_tibble() %>% 
+  filter(is.na(var2)) %>% 
+  select(-c(grp,var2,vcov)) %>% 
+  mutate(var1 = c(levels(irap_sim$trial_type),"Residual")) %>% 
+  rename(Fator = var1, "Desvio-padrão (s)" = sdcor) %>% 
+  hux() %>%
+  set_caption("Variabilidade de efeitos entre participantes e resíduos") %>%
+  theme_article()
+
+```
+
+O modelo obtém os efeitos para cada participante:
+
+```{r}
+lmm$full_model %>% 
+  ranef() %>% 
+  as_tibble() %>% 
+  mutate(trial_type = factor(term, labels = levels(irap_sim$trial_type))) %>% 
+  ggplot(aes(trial_type, condval))+
+  geom_jitter(width = .1, alpha = .3)+
+  geom_boxplot(linewidth = 1, width = .1, alpha = .5)+
+  labs(y = "Effects (betas)", x = "Trial type",
+       subtitle = "Effects per participant and condition")
+  
+```
+
+Na visualização fica evidente a variabilidade maior dos efeitos para a condição Self Positive. Em posse desses valores, também é possível fazer afirmações sobre participantes individuais, se for desejável.
+
+## Um porém
+
+Minha ideia com a demosntração acima é dar uma prova de conceito de que é possível uma análise com alguma semelhança aos D-Scores, mas um pouco mais robusta, com estiamtivas de efeitos populacionais e individuais para dados de TR como os do IRAP. Contudo eu tomei atalhos na análise: criei os dados com distribuição normal e analisei com um modelo linear hierárquico tradicional (gaussiano). Na verdade, dados de TR costumam ter uma distribuição assimétrica que devem ser analisados com modelos generalizados. Isso também é possível e, da mesma forma, são obtidos efeitos fixos e efeitos individuais. O problema é que a estimação desses modelos é muito mais sujeita a problemas técnicos na estimação, pelo menos na versão frequentista. Então, para fazer pra valer, eu aplicaria uma versão baeysiana do modelo. A única coisa que perdemos nesse caso são os p-valores, que não fazem sentido na abordagem baeysiana.
 
